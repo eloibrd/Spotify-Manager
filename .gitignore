@@ -3,3 +3,7 @@
 
 # environment
 .env
+
+# airflow related
+logs/
+plugins/
