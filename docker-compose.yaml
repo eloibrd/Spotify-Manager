@@ -1,0 +1,104 @@
+---
+version: "3.4"
+
+x-common: &common
+  image: apache/airflow:2.3.0
+  user: "${AIRFLOW_UID}:0"
+  env_file:
+    - .env
+  volumes:
+    - ./dags:/opt/airflow/dags
+    - ./logs:/opt/airflow/logs
+    - ./plugins:/opt/airflow/plugins
+    - /var/run/docker.sock:/var/run/docker.sock
+
+x-depends-on: &depends-on
+  depends_on:
+    postgres:
+      condition: service_healthy
+    airflow-init:
+      condition: service_completed_successfully
+
+services:
+  traefik:
+    image: "traefik:v2.10"
+    container_name: "traefik"
+    command:
+      - "--log.level=INFO"
+      - "--api.insecure=true"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+    ports:
+      - "80:80"
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+    networks:
+      - airflow
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.api.rule=Host(`$TRAEFIK_DASHBOARD_HOST`)"
+      - "traefik.http.routers.api.entrypoints=webinsecure"
+      - "traefik.http.routers.api.service=api@internal"
+
+  postgres:
+    image: postgres:16
+    container_name: airflow-postgres
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 5s
+      retries: 5
+    env_file:
+      - .env
+    environment:
+      - PGDATA=/var/lib/postgresql/data/pgdata
+    volumes:
+      - airflowdb:/var/lib/postgresql/data
+    networks:
+      - airflow
+
+  scheduler:
+    <<: [*common, *depends-on]
+    container_name: airflow-scheduler
+    command: scheduler
+    restart: on-failure
+    networks:
+      - airflow
+
+  webserver:
+    <<: [*common, *depends-on]
+    container_name: airflow-webserver
+    restart: always
+    command: webserver
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 30s
+      retries: 5
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.airflow-webserver.rule=Host(`$TRAEFIK_AIRFLOW_WEBSERVER_HOST`)"
+      - "traefik.http.routers.airflow-webserver.entrypoints=web"
+      - "traefik.http.services.airflow-webserver.loadbalancer.server.port:80"
+    networks:
+      - airflow
+
+  airflow-init:
+    <<: *common
+    container_name: airflow-init
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        mkdir -p /sources/logs /sources/dags /sources/plugins
+        chown -R "${AIRFLOW_UID}:0" /sources/{logs,dags,plugins}
+        exec /entrypoint airflow version
+    networks:
+      - airflow
+
+volumes:
+  airflowdb:
+
+networks:
+  airflow:
+    name: airflow-network
