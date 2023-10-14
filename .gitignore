@@ -1,9 +1,12 @@
-# python venv
-.venv/
-
 # environment
 .env
 
 # airflow related
 logs/
 plugins/
+
+# python venv
+.venv/
+
+# python related
+**/__pycache__/
